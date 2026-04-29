@@ -1,0 +1,12 @@
+============================================================
+  KeyLogger Session Started
+  Thursday, April 30 2026  01:53:29 AM
+============================================================
+
+hg,[BACKSPACE][BACKSPACE][BACKSPACE]alo zakaria[CTRL][BACKSPACE]hello[CTRL][BACKSPACE][ALT][TAB]
+
+============================================================
+  Session Ended
+  Thursday, April 30 2026  01:53:43 AM
+  Total Keystrokes: 30
+============================================================
