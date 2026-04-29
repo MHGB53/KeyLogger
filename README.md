@@ -31,10 +31,10 @@ pip install -r requirements.txt
 
 ```bash
 # Run with ESC key as the stop signal (default)
-python keylogger.py
+python gui.py
 
 # Run without ESC stop (use Ctrl+C instead)
-python keylogger.py --no-esc
+python gui.py --no-esc
 ```
 
 ---
